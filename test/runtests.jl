@@ -1,5 +1,6 @@
 using WaveToy
 using Base.Test
 
-# write your own tests here
-@test 1 == 1
+t0 = 0.0
+s = init(t0)
+r = rhs(s)
