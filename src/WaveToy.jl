@@ -52,6 +52,46 @@ end
 
 
 
+# Norms
+
+export Norm
+immutable Norm
+    count::Float64
+    sum::Float64
+    sum2::Float64
+    sumabs::Float64
+    min::Float64
+    max::Float64
+    maxabs::Float64
+    Norm() = new(0.0, 0.0, 0.0, 0.0, typemax(Float64), typemin(Float64), 0.0)
+    function Norm(x0::Real)
+        x = Float64(x0)
+        new(1.0, x, x^2, abs(x), x, x, abs(x))
+    end
+    function Norm(x::Norm, y::Norm)
+        new(x.count+y.count, x.sum+y.sum, x.sum2+y.sum2,
+            x.sumabs+y.sumabs, min(x.min, y.min), max(x.max, y.max),
+            max(x.maxabs, y.maxabs))
+    end
+end
+import Base: count, sum, min, max
+export count, sum, min, max, avg, sdv, norm1, norm2, norminf
+count(n::Norm) = n.count
+sum(n::Norm) = n.sum
+min(n::Norm) = n.min
+max(n::Norm) = n.max
+avg(n::Norm) = n.sum / n.count
+sdv(n::Norm) = sqrt(max(0.0, n.count * n.sum2 - n.sum^2)) / n.count
+norm1(n::Norm) = n.sumabs / n.count
+norm2(n::Norm) = sqrt(n.sum2 / n.count)
+norminf(n::Norm) = n.maxabs
+import Base: zero, +
+export zero, +
+zero(::Type{Norm}) = Norm()
++(x::Norm, y::Norm) = Norm(x, y)
+
+
+
 # Cells
 
 export Cell
@@ -63,21 +103,31 @@ immutable Cell
     vz::Float64
 end
 
-import Base: .+, .-, .*, ./
-export .+, .-, .*, ./
-.+(c::Cell) = Cell(+c.u, +c.ρ, +c.vx, +c.vy, +c.vz)
-.-(c::Cell) = Cell(-c.u, -c.ρ, -c.vx, -c.vy, -c.vz)
-.+(c1::Cell, c2::Cell) =
+import Base: +, -, *, /, .+, .-, .*, ./
+export +, -, *, /, .+, .-, .*, ./
++(c::Cell) = Cell(+c.u, +c.ρ, +c.vx, +c.vy, +c.vz)
+-(c::Cell) = Cell(-c.u, -c.ρ, -c.vx, -c.vy, -c.vz)
++(c1::Cell, c2::Cell) =
     Cell(c1.u + c2.u, c1.ρ + c2.ρ, c1.vx + c2.vx, c1.vy + c2.vy, c1.vz + c2.vz)
-.-(c1::Cell, c2::Cell) =
+-(c1::Cell, c2::Cell) =
     Cell(c1.u - c2.u, c1.ρ - c2.ρ, c1.vx - c2.vx, c1.vy - c2.vy, c1.vz - c2.vz)
-.*(α::Float64, c::Cell) = Cell(α * c.u, α * c.ρ, α * c.vx, α * c.vy, α * c.vz)
-.*(c::Cell, α::Float64) = Cell(c.u * α, c.ρ * α, c.vx * α, c.vy * α, c.vz * α)
-./(c::Cell, α::Float64) = Cell(c.u / α, c.ρ / α, c.vx / α, c.vy / α, c.vz / α)
+*(α::Float64, c::Cell) = Cell(α * c.u, α * c.ρ, α * c.vx, α * c.vy, α * c.vz)
+*(c::Cell, α::Float64) = Cell(c.u * α, c.ρ * α, c.vx * α, c.vy * α, c.vz * α)
+/(c::Cell, α::Float64) = Cell(c.u / α, c.ρ / α, c.vx / α, c.vy / α, c.vz / α)
+.+(c::Cell) = +(c)
+.-(c::Cell) = -(c)
+.+(c1::Cell, c2::Cell) = +(c1, c2)
+.-(c1::Cell, c2::Cell) = -(c1, c2)
+.*(α::Float64, c::Cell) = *(α, c)
+.*(c::Cell, α::Float64) = *(c, α)
+./(c::Cell, α::Float64) = /(c, α)
 
-import Base: norm
-export norm
-norm(c::Cell, p=2) = norm((c.u, c.ρ, c.vx, c.vy, c.vz), p)
+Norm(c::Cell) = Norm(c.u) + Norm(c.ρ) + Norm(c.vx) + Norm(c.vy) + Norm(c.vz)
+
+export energy
+@fastmath function energy(c::Cell)
+    1//2 * (c.ρ^2 + c.vx^2 + c.vy^2 + c.vz^2)
+end
 
 export analytic
 @fastmath function analytic(t::Float64, x::Float64, y::Float64, z::Float64)
@@ -88,6 +138,17 @@ export analytic
     vy = A * ky * sin(ω * t) * sin(kx * x) * cos(ky * y) * sin(kz * z)
     vz = A * kz * sin(ω * t) * sin(kx * x) * sin(ky * y) * cos(kz * z)
     Cell(u, ρ, vx, vy, vz)
+end
+
+export init
+function init(t::Float64, x::Float64, y::Float64, z::Float64)
+    analytic(t, x, y, z)
+end
+
+import Base: error
+export error
+function error(c::Cell, t::Float64, x::Float64, y::Float64, z::Float64)
+    c .- analytic(t, x, y, z)
 end
 
 export rhs
@@ -109,25 +170,41 @@ end
 
 export Grid
 type Grid
-    iter::Int
     time::Float64
     cells::Array{Cell,3}
-    Grid(iter, time, cells) = new(iter, time, cells)
+    Grid(t::Real, c::Array{Cell,3}) = new(Float64(t), c)
 end
 
+import Base: +, -, *, /, .+, .-, .*, ./
+export +, -, *, /, .+, .-, .*, ./
++(g::Grid) = Grid(+g.time, .+(g.cells))
+-(g::Grid) = Grid(-g.time, .-(g.cells))
++(g1::Grid, g2::Grid) = Grid(g1.time + g2.time, g1.cells + g2.cells)
+-(g1::Grid, g2::Grid) = Grid(g1.time - g2.time, g1.cells - g2.cells)
+*(α::Float64, g::Grid) = Grid(α * g.time, map(x->α*x, g.cells))
+*(g::Grid, α::Float64) = Grid(g.time * α, map(x->x*α, g.cells))
+/(g::Grid, α::Float64) = Grid(g.time / α, map(x->x/α, g.cells))
+.+(g::Grid) = +(g)
+.-(g::Grid) = -(g)
+.+(g1::Grid, g2::Grid) = +(g1, g2)
+.-(g1::Grid, g2::Grid) = -(g1, g2)
+.*(α::Float64, g::Grid) = *(α, g)
+.*(g::Grid, α::Float64) = *(g, α)
+./(g::Grid, α::Float64) = /(g, α)
+
+Norm(g::Grid) = mapreduce(Norm, +, g.cells[2:end-1, 2:end-1, 2:end-1])
+
 export energy
-@fastmath function energy(c::Cell)
-    1//2 * (c.ρ^2 + c.vx^2 + c.vy^2 + c.vz^2)
-end
 function energy(g::Grid)
     c = g.cells
-    ϵ = similar(Float64, c)
-    @inbounds @simd for i in eachindex(ϵ)
+    ϵ = similar(c, Float64)
+    @inbounds @simd for i in eachindex(c)
         ϵ[i] = energy(c[i])
     end
     ϵ
 end
 
+import Base: error
 export error
 function error(g::Grid)
     t = g.time
@@ -135,25 +212,21 @@ function error(g::Grid)
     err = similar(c)
     @inbounds for k=1:size(c,3), j=1:size(c,2)
         @simd for i=1:size(c,1)
-            err[i,j,k] = c[i,j,k] .- analytic(t, x(i), y(j), z(k))
+            err[i,j,k] = error(c[i,j,k], t, x(i), y(j), z(k))
         end
     end
-    err
+    Grid(t, err)
 end
 
-import Base: norm
-export norm
-norm(g::Grid, p=2) = dx*dy*dz * norm(g.cells[2:end-1, 2:end-1, 2:end-1], p)
-
 export init
-function init(t::Float64)
-    c = Array{Cell}(ni+2,nj+2,nk+2)
+function init(t::Real)
+    c = Array{Cell}(ni,nj,nk)
     @inbounds for k=1:size(c,3), j=1:size(c,2)
         @simd for i=1:size(c,1)
-            c[i,j,k] = analytic(t, x(i), y(j), z(k))
+            c[i,j,k] = init(t, x(i), y(j), z(k))
         end
     end
-    Grid(0, t, c)
+    Grid(t, c)
 end
 
 export rhs
@@ -167,11 +240,39 @@ function rhs(g::Grid)
         end
     end
     periodic!(r)
-    Grid(g.iter, 0.0, r)
+    Grid(1, r)
 end
 
 
 
 # Simulation
+
+export State
+type State
+    iter::Int
+    state::Grid
+    rhs::Grid
+    ϵ::Array{Float64,3}
+    function State(i::Integer, g::Grid)
+        r = rhs(g)::Grid
+        ϵ = energy(g)::Array{Float64,3}
+        new(Int(i), g, r, ϵ)::State
+    end
+end
+
+export init
+function init()
+    State(0, init(tmin))
+end
+
+export rk2
+function rk2(s::State)
+    s0 = s.state
+    r0 = s.rhs
+    s1 = s0 + (dt/2) * r0
+    r1 = rhs(s1)
+    s2 = s0 + dt * r1
+    State(s.iter+1, s2)
+end
 
 end
