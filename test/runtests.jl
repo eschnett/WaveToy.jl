@@ -20,12 +20,13 @@ n2 = mapreduce(Norm, +, collect(1:10))
 @test norminf(n2) == 10
 
 # Test cells
-c0 = init(0.0, 0.0, 0.0, 0.0)
-ce = error(c0, 0.0, 0.0, 0.0, 0.0)
+ci = init(0.0, 0.0, 0.0, 0.0)
+ce = error(ci, 0.0, 0.0, 0.0, 0.0)
 @test ce == Cell(0.0, 0.0, 0.0, 0.0, 0.0)
-cn = Norm(ce)
+c0 = Cell(0.0, 0.0, 0.0, 0.0, 0.0)
+cn = Norm(c0)
 @test norminf(cn) == 0
-cϵ = energy(c0)
+cϵ = energy(ce)
 @test cϵ == 0.0
 cr = rhs(c0, c0,c0,c0,c0,c0,c0)
 @test cr == Cell(0.0, 0.0, 0.0, 0.0, 0.0)
