@@ -46,13 +46,34 @@ const outfile_every = 0
 
 
 
+# Multitasking
+
+immutable Future{T}
+    task::Task
+    Future(t::Task) = new(t)
+    Future(val::T) = new(@schedule val)
+end
+import Base: wait, isready, get
+export wait, isready, get
+macro future(T, expr)
+    :(Future{$(esc(T))}(@schedule $(esc(expr))))
+end
+wait(ftr::Future) = (wait(ftr.task); nothing)
+isready(ftr::Future) = istaskdone(ftr.task)
+get{T}(ftr::Future{T}) = wait(ftr.task)::T
+
+
+
+# Array operations
+
 function periodic!{T}(a::Array{T,dim})
-    a[1, 2:end-1, 2:end-1] = a[end-1, 2:end-1, 2:end-1]
-    a[end, 2:end-1, 2:end-1] = a[2, 2:end-1, 2:end-1]
-    a[:, 1, 2:end-1] = a[:, end-1, 2:end-1]
-    a[:, end, 2:end-1] = a[:, 2, 2:end-1]
-    a[:, :, 1] = a[:, :, end-1]
-    a[:, :, end] = a[:, :, 2]
+    ni,nj,nk = size(a)
+    a[1, 2:nj-1, 2:nk-1] = sub(a, ni-1, 2:nj-1, 2:nk-1)
+    a[ni, 2:nj-1, 2:nk-1] = sub(a, 2, 2:nj-1, 2:nk-1)
+    a[:, 1, 2:nk-1] = sub(a, :, nj-1, 2:nk-1)
+    a[:, nj, 2:nk-1] = sub(a, :, 2, 2:nk-1)
+    a[:, :, 1] = sub(a, :, :, nk-1)
+    a[:, :, end] = sub(a, :, :, 2)
     a
 end
 
@@ -129,6 +150,9 @@ export +, -, *, /, \
     Cell(α \ c.u, α \ c.ρ, α \ c.vx, α \ c.vy, α \ c.vz)
 @inline /(c::Cell, α::Float64) =
     Cell(c.u / α, c.ρ / α, c.vx / α, c.vy / α, c.vz / α)
+@inline lincom(c1::Cell, α::Float64, c2::Cell) =
+    Cell(c1.u + α * c2.u, c1.ρ + α * c2.ρ, c1.vx + α * c2.vx, c1.vy + α * c2.vy,
+        c1.vz + α * c2.vz)
 
 @inline Norm(c::Cell) =
     Norm(c.u) + Norm(c.ρ) + Norm(c.vx) + Norm(c.vy) + Norm(c.vz)
@@ -276,6 +300,25 @@ function /(g::Grid, α::Float64)
         Grid(g.time / α, r)
     end
 end
+function lincom(g1::Grid, α::Float64, g2::Grid)
+    c1,c2 = g1.cells, g2.cells
+    r = similar(c1)
+    @assert size(c2) == size(c1)
+    @inbounds @simd for i in eachindex(r)
+        r[i] = c1[i] + α * c2[i]
+    end
+    Grid(g1.time + α * g1.time, r)
+end
+function lincom!(g1::Grid, α::Float64, g2::Grid)
+    c1,c2 = g1.cells, g2.cells
+    @assert size(c2) == size(c1)
+    @inbounds @simd for i in eachindex(c1)
+        c1[i] = c1[i] + α * c2[i]
+    end
+    g1.time = g1.time + α * g2.time
+    g1
+end
+
 
 # Norm(g::Grid) = mapreduce(Norm, +, g.cells[2:end-1, 2:end-1, 2:end-1])
 # Norm(a::Array{Float64,dim}) = mapreduce(Norm, +, a[2:end-1, 2:end-1, 2:end-1])
@@ -345,61 +388,103 @@ end
 export State
 type State
     iter::Int
-    state::Grid
-    rhs::Grid
-    ϵ::Array{Float64,3}
-    etot::Float64
-    function State(i::Integer, g::Grid)
-        r = rhs(g)
-        ϵ = energy(g)
-        e = sum(Norm(ϵ)) * dx*dy*dz
+    state::Future{Grid}
+    rhs::Future{Grid}
+    ϵ::Future{Array{Float64,3}}
+    etot::Future{Float64}
+    function State(i::Integer, g::Future{Grid})
+        r = @future Grid rhs(get(g))
+        ϵ = @future Array{Float64,3} energy(get(g))
+        e = @future Float64 sum(Norm(get(ϵ))) * dx*dy*dz
         new(Int(i), g, r, ϵ, e)
     end
 end
 
 export init
 function init()
-    State(0, init(tmin))
+    State(0, @future Grid init(tmin))
 end
 
 export rk2
 function rk2(s::State)
     s0 = s.state
     r0 = s.rhs
-    s1 = s0 + (dt/2) * r0
-    r1 = rhs(s1)
-    s2 = s0 + dt * r1
+    # s1 = s0 + (dt/2) * r0
+    s1 = @future Grid lincom(get(s0), dt/2, get(r0))
+    r1 = @future Grid rhs(get(s1))
+    # s2 = s0 + dt * r1
+    s2 = @future Grid lincom(get(s0), dt, get(r1))
+    # s2 = s0
+    # lincom!(s2, dt, r1)
     State(s.iter+1, s2)
 end
 
-function output(s::State)
-    if (outinfo_every > 0 &&
-            (s.iter == niters || mod(s.iter, outinfo_every) == 0))
+
+
+# Output
+
+function output_info(tok::Future{Void}, s::State)
+    @future Void begin
+        wait(tok)
         @printf "   n: %4d" s.iter
-        @printf "   t: %5.2f" s.state.time
-        @printf "   ρ[0]: %7.3f" s.state.cells[2,2,2].ρ
-        @printf "   E: %6.3f" s.etot
+        @printf "   t: %5.2f" get(s.state).time
+        @printf "   ρ[0]: %7.3f" get(s.state).cells[2,2,2].ρ
+        @printf "   E: %6.3f" get(s.etot)
         println()
-    end
-    if (outfile_every > 0 &&
-            (s.iter == niters || mod(s.iter, outfile_every) == 0))
-        if s.iter == 0
-            try rm("output.h5") end
-        end
-        for field in (:u, :ρ, :vx, :vy, :vz)
-            h5write("output.h5", "State/iter=$(s.iter)/$field",
-                    map(c->c.(field), s.state.cells[2:end-1, 2:end-1, 2:end-1]))
-        end
+        nothing
     end
 end
 
+function output_file(tok::Future{Void}, s::State)
+    if s.iter == 0
+        try rm("output.h5") end
+    end
+    @future Void begin
+        for field in (:u, :ρ, :vx, :vy, :vz)
+            h5write("output.h5", "State/iter=$(s.iter)/$field",
+                map(c->c.(field),
+                    sub(get(s.state).cells, 2:ni+1, 2:nj+1, 2:nk+1)))
+        end
+        wait(tok)
+        nothing
+    end
+end
+
+export init_output, output, finish_output
+function init_output()
+    Future{Void}(nothing), Future{Void}(nothing)
+end
+function output(tok::Tuple{Future{Void}, Future{Void}}, s::State)
+    itok, ftok = tok
+    if (outinfo_every > 0 &&
+            (s.iter == niters || mod(s.iter, outinfo_every) == 0))
+        itok = output_info(itok, s)
+    end
+    if (outfile_every > 0 &&
+            (s.iter == niters || mod(s.iter, outfile_every) == 0))
+        ftok = output_file(ftok, s)
+    end
+    return itok, ftok
+end
+function wait_output(tok::Tuple{Future{Void}, Future{Void}})
+    itok, ftok = tok
+    wait(itok)
+    wait(ftok)
+end
+
+
+
 function main()
+    println("WaveToy   [$ni,$nj,$nk]")
+    tok = init_output()
     s = init()
-    output(s)
+    tok = output(tok, s)
     while s.iter < niters
         s = rk2(s)
-        output(s)
+        tok = output(tok, s)
     end
+    wait_output(tok)
+    println("Done.")
 end
 
 end
