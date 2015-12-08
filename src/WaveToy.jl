@@ -155,12 +155,9 @@ export zero, +
 # Physics
 
 """
-    L_field    = Int 1/2 [-u,t^2 + u,a^2]
-    L_particle = Sum [- 1/(2m) p_a^2 + q u]
-
-    u,tt  = u,aa
-    q_a,t = p_a/m
-    p_a,t = - q u,a
+    See Poisson, Pound, Vega,
+    "The Motion of Point Particles in Curved Spacetime", LRR-2011-7 (2011),
+    DOI 10.12942/lrr-2011-7
 """
 function physics end
 
@@ -307,7 +304,7 @@ export +, -, *, /, \, axpy
         p1.qy + p2.qy, p1.qz + p2.qz, p1.ut + p2.ut, p1.ux + p2.ux,
         p1.uy + p2.uy, p1.uz + p2.uz)
 @inline -(p1::Particle, p2::Particle) =
-    Particle(p1.m - p2mq, p1.q - p2.q, p1.qt - p2.qt, p1.qx - p2.qx,
+    Particle(p1.m - p2.m, p1.q - p2.q, p1.qt - p2.qt, p1.qx - p2.qx,
         p1.qy - p2.qy, p1.qz - p2.qz, p1.ut - p2.ut, p1.ux - p2.ux,
         p1.uy - p2.uy, p1.uz - p2.uz)
 @inline *(α::Float64, p::Particle) =
@@ -341,7 +338,7 @@ end
 end
 
 "resting"
-@inline function resting(t::Float64, i::Int)
+@inline function resting(t::Float64, n::Int)
     m = mp
     q = qp
     qt = 0.0
@@ -356,19 +353,19 @@ end
 end
 
 export analytic
-@inline function analytic(t::Float64, i::Int)
-    resting(t, i)
+@inline function analytic(t::Float64, n::Int)
+    resting(t, n)
 end
 
 export init
-@inline function init(t::Float64, i::Int)
-    analytic(t, i)
+@inline function init(t::Float64, n::Int)
+    analytic(t, n)
 end
 
 import Base: error
 export error
-@inline function error(c::Particle, t::Float64, i::Int)
-    p - analytic(t, i)
+@inline function error(p::Particle, t::Float64, n::Int)
+    p - analytic(t, n)
 end
 
 export rhs
@@ -509,7 +506,7 @@ function error(g::Grid)
     p = g.particles
     ep = similar(p)
     @inbounds @simd for n in eachindex(ep)
-        ep[n] = error(p[n], t)
+        ep[n] = error(p[n], t, n)
     end
     Grid(t, ec, ep)
 end
