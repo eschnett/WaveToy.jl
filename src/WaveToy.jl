@@ -1,6 +1,7 @@
 module WaveToy
 
 using HDF5
+using PyPlot
 
 
 
@@ -32,8 +33,10 @@ jpos(y) = mod(round(Int, (y - ymin) / dy), nj) + 2
 kpos(z) = mod(round(Int, (z - zmin) / dz), nk) + 2
 
 const np = 1
-const pm = 1.0
-const pq = 1.0
+const mp = 4.0 # 1.0
+const qp = 1.0
+
+const mass = 0.0
 
 const A = 1.0
 const kx = ni==1 ? 0.0 : 2π / (xmax - xmin)
@@ -60,30 +63,34 @@ const outfile_every = 1 # niters ÷ 16
 import Base: wait, isready, get
 export wait, isready, get
 
-#=
-immutable Future{T}
-    task::Task
-    Future(t::Task) = new(t)
-    Future(val::T) = new(@schedule val)
-end
-macro future(T, expr)
-    :(Future{$(esc(T))}(@schedule $(esc(expr))))
-end
-wait(ftr::Future) = (wait(ftr.task); nothing)
-isready(ftr::Future) = istaskdone(ftr.task)
-get{T}(ftr::Future{T}) = wait(ftr.task)::T
-=#
+if false
 
-immutable Future{T}
-    val::T
-    Future(val::T) = new(val)
+    immutable Future{T}
+        task::Task
+        Future(t::Task) = new(t)
+        Future(val::T) = new(@schedule val)
+    end
+    macro future(T, expr)
+        :(Future{$(esc(T))}(@schedule $(esc(expr))))
+    end
+    wait(ftr::Future) = (wait(ftr.task); nothing)
+    isready(ftr::Future) = istaskdone(ftr.task)
+    get{T}(ftr::Future{T}) = wait(ftr.task)::T
+
+else
+
+    immutable Future{T}
+        val::T
+        Future(val::T) = new(val)
+    end
+    macro future(T, expr)
+        :(Future{$(esc(T))}($(esc(expr))))
+    end
+    wait(ftr::Future) = nothing
+    isready(ftr::Future) = true
+    get{T}(ftr::Future{T}) = ftr.val
+
 end
-macro future(T, expr)
-    :(Future{$(esc(T))}($(esc(expr))))
-end
-wait(ftr::Future) = nothing
-isready(ftr::Future) = true
-get{T}(ftr::Future{T}) = ftr.val
 
 
 
@@ -250,7 +257,7 @@ export rhs
     udot = c.ft
     ftdot = ((bxp.fx - bxm.fx) / 2dx +
              (byp.fy - bym.fy) / 2dy +
-             (bzp.fz - bzm.fz) / 2dz)
+             (bzp.fz - bzm.fz) / 2dz) - mass^2 * c.u
     fxdot = (bxp.ft - bxm.ft) / 2dx
     fydot = (byp.ft - bym.ft) / 2dy
     fzdot = (bzp.ft - bzm.ft) / 2dz
@@ -277,52 +284,57 @@ end
 
 export Particle
 immutable Particle
-    m::Float64
-    q::Float64
+    m::Float64    # dynamical mass
+    q::Float64    # charge
+    qt::Float64    # q_a
     qx::Float64
     qy::Float64
     qz::Float64
-    px::Float64
-    py::Float64
-    pz::Float64
+    ut::Float64    # u^a
+    ux::Float64
+    uy::Float64
+    uz::Float64
 end
 
 import Base: +, -, *, /, \
 export +, -, *, /, \, axpy
 @inline +(p::Particle) =
-    Particle(+p.m, +p.q, +p.qx, +p.qy, +p.qz, +p.px, +p.py, +p.pz)
+    Particle(+p.m, +p.q, +p.qt, +p.qx, +p.qy, +p.qz, +p.ut, +p.ux, +p.uy, +p.uz)
 @inline -(p::Particle) =
-    Particle(-p.m, -p.q, -p.qx, -p.qy, -p.qz, -p.px, -p.py, -p.pz)
+    Particle(-p.m, -p.q, -p.qt, -p.qx, -p.qy, -p.qz, -p.ut, -p.ux, -p.uy, -p.uz)
 @inline +(p1::Particle, p2::Particle) =
-    Particle(p1.m + p2.m, p1.q + p2.q, p1.qx + p2.qx, p1.qy + p2.qy,
-        p1.qz + p2.qz, p1.px + p2.px, p1.py + p2.py, p1.pz + p2.pz)
+    Particle(p1.m + p2.m, p1.q + p2.q, p1.qt + p2.qt, p1.qx + p2.qx,
+        p1.qy + p2.qy, p1.qz + p2.qz, p1.ut + p2.ut, p1.ux + p2.ux,
+        p1.uy + p2.uy, p1.uz + p2.uz)
 @inline -(p1::Particle, p2::Particle) =
-    Particle(p1.m - p2mq, p1.q - p2.q, p1.qx - p2.qx, p1.qy - p2.qy,
-        p1.qz - p2.qz, p1.px - p2.px, p1.py - p2.py, p1.pz - p2.pz)
+    Particle(p1.m - p2mq, p1.q - p2.q, p1.qt - p2.qt, p1.qx - p2.qx,
+        p1.qy - p2.qy, p1.qz - p2.qz, p1.ut - p2.ut, p1.ux - p2.ux,
+        p1.uy - p2.uy, p1.uz - p2.uz)
 @inline *(α::Float64, p::Particle) =
-    Particle(α * p.m, α * p.q, α * p.qx, α * p.qy, α * p.qz, α * p.px, α * p.py,
-        α * p.pz)
+    Particle(α * p.m, α * p.q, α * p.qt, α * p.qx, α * p.qy, α * p.qz, α * p.ut,
+        α * p.ux, α * p.uy, α * p.uz)
 @inline *(p::Particle, α::Float64) =
-    Particle(p.m * α, p.q * α, p.qx * α, p.qy * α, p.qz * α, p.px * α, p.py * α,
-        p.pz * α)
+    Particle(p.m * α, p.q * α, p.qt * α, p.qx * α, p.qy * α, p.qz * α, p.ut * α,
+        p.ux * α, p.uy * α, p.uz * α)
 @inline \(α::Float64, p::Particle) =
-    Particle(α \ p.m, α \ p.q, α \ p.qx, α \ p.qy, α \ p.qz, α \ p.px, α \ p.py,
-        α \ p.pz)
+    Particle(α \ p.m, α \ p.q, α \ p.qt, α \ p.qx, α \ p.qy, α \ p.qz, α \ p.ut,
+        α \ p.ux, α \ p.uy, α \ p.uz)
 @inline /(p::Particle, α::Float64) =
-    Particle(p.m / α, p.q / α, p.qx / α, p.qy / α, p.qz / α, p.px / α, p.py / α,
-        p.pz / α)
+    Particle(p.m / α, p.q / α, p.qt / α, p.qx / α, p.qy / α, p.qz / α, p.ut / α,
+        p.ux / α, p.uy / α, p.uz / α)
 @inline axpy(α::Float64, p1::Particle, p2::Particle) =
-    Particle(α * p1.m + p2.m, α * p1.q + p2.q, α * p1.qx + p2.qx,
-        α * p1.qy + p2.qy, α * p1.qz + p2.qz, α * p1.px + p2.px,
-        α * p1.py + p2.py, α * p1.pz + p2.pz)
+    Particle(α * p1.m + p2.m, α * p1.q + p2.q, α * p1.qt + p2.qt,
+        α * p1.qx + p2.qx, α * p1.qy + p2.qy, α * p1.qz + p2.qz,
+        α * p1.ut + p2.ut, α * p1.ux + p2.ux, α * p1.uy + p2.uy,
+        α * p1.uz + p2.uz)
 
 @inline Norm(p::Particle) =
-    (Norm(p.m) + Norm(p.q) + Norm(p.qx) + Norm(p.qy) + Norm(p.qz) + Norm(p.px) +
-        Norm(p.py) + Norm(p.pz))
+    (Norm(p.m) + Norm(p.q) + Norm(p.qt) + Norm(p.qx) + Norm(p.qy) + Norm(p.qz) +
+        Norm(p.ut) + Norm(p.ux) + Norm(p.uy) + Norm(p.uz))
 
 export energy
 @inline function energy(p::Particle)
-    1/(2p.m) * (p.px^2 + p.py^2 + p.pz^2)
+    p.m/2 * (p.ut^2 + p.ux^2 + p.uy^2 + p.uz^2)
 end
 @inline function energy(p::Particle, c::Cell)
     p.q * c.u
@@ -330,7 +342,17 @@ end
 
 "resting"
 @inline function resting(t::Float64, i::Int)
-    Particle(pm, pq, (xmin+xmax)/4, (ymin+ymax)/4, (zmin+zmax)/4, 0, 0, 0)
+    m = mp
+    q = qp
+    qt = 0.0
+    qx = xmin + (xmax - xmin) * 5/8
+    qy = ymin + (ymax - ymin)/4
+    qz = zmin + (zmax - zmin)/4
+    ut = 1
+    ux = 0
+    uy = 0
+    uz = 0
+    Particle(m, q, qt, qx, qy, qz, ut, ux, uy, uz)
 end
 
 export analytic
@@ -353,24 +375,50 @@ export rhs
 @inline function rhs(p::Particle)
     mdot = 0
     qdot = 0
-    qxdot = p.px / p.m
-    qydot = p.py / p.m
-    qzdot = p.pz / p.m
+    # after (17.7)
+    qtdot = 1
+    qxdot = p.ux / p.ut
+    qydot = p.uy / p.ut
+    qzdot = p.uz / p.ut
+    ptdot = 0
     pxdot = 0
     pydot = 0
     pzdot = 0
-    Particle(mdot, qdot, qxdot, qydot, qzdot, pxdot, pydot, pzdot)
+    Particle(mdot, qdot, qtdot, qxdot, qydot, qzdot, ptdot, pxdot, pydot, pzdot)
 end
 @inline function rhs(p::Particle, c::Cell)
-    mdot = 0
+    # after (17.7)
+    # u^t = dt/dτ   u^t/dt = 1/dτ
+    # (17.8)
+    f_u = - c.ft * p.ut + c.fx * p.ux + c.fy * p.uy + c.fz * p.uz
+    mdot = - p.q * f_u / p.ut
     qdot = 0
+    qtdot = 0
     qxdot = 0
     qydot = 0
     qzdot = 0
-    pxdot = - p.q * c.fx
-    pydot = - p.q * c.fy
-    pzdot = - p.q * c.fz
-    Particle(mdot, qdot, qxdot, qydot, qzdot, pxdot, pydot, pzdot)
+    # (17.7)
+    guu_f_t = ((-1 + p.ut * p.ut) * c.ft +
+                     p.ut * p.ux  * c.fx +
+                     p.ut * p.uy  * c.fy +
+                     p.ut * p.uz  * c.fz)
+    guu_f_x = (      p.ux * p.ut  * c.ft +
+               ( 1 + p.ux * p.ux) * c.fx +
+                     p.ux * p.uy  * c.fy +
+                     p.ux * p.uz  * c.fz)
+    guu_f_y = (      p.uy * p.ut  * c.ft +
+                     p.uy * p.ux  * c.fx +
+               ( 1 + p.uy * p.uy) * c.fy +
+                     p.uy * p.uz  * c.fz)
+    guu_f_z = (      p.uz * p.ut  * c.ft +
+                     p.uz * p.ux  * c.fx +
+                     p.uz * p.uy  * c.fy +
+               ( 1 + p.uz * p.uz) * c.fz)
+    utdot = p.q * guu_f_t / (p.m * p.ut)
+    uxdot = p.q * guu_f_x / (p.m * p.ut)
+    uydot = p.q * guu_f_y / (p.m * p.ut)
+    uzdot = p.q * guu_f_z / (p.m * p.ut)
+    Particle(mdot, qdot, qtdot, qxdot, qydot, qzdot, utdot, uxdot, uydot, uzdot)
 end
 
 
@@ -496,6 +544,7 @@ function rhs(g::Grid)
     rp = similar(p)
     @inbounds @simd for n in eachindex(rp)
         rp[n] = rhs(p[n])
+        # TODO: interpolate
         i,j,k = ipos(p[n].qx), jpos(p[n].qy), kpos(p[n].qz)
         rp[n] += rhs(p[n], c[i,j,k])
     end
@@ -563,14 +612,18 @@ end
 function output_info(tok::Future{Void}, s::State)
     @future Void begin
         wait(tok)
-        @printf "   n: %4d" s.iter
-        @printf "   t: %5.2f" get(s.state).time
-        @printf "   ft[0]: %7.3f" get(s.state).cells[2,2,2].ft
-        if !isempty(get(s.state).particles)
-            @printf "   qx[0]: %7.3f" get(s.state).particles[1].qx
+        @printf "n: %4d" s.iter
+        state = get(s.state)
+        @printf "    t: %5.2f" state.time
+        cells = state.cells
+        @printf "    ft[0]: %7.3f" cells[2,2,2].ft
+        particles = state.particles
+        if !isempty(particles)
+            @printf "    qx[0]: %7.3f" particles[1].qx
         end
-        @printf "   E: %6.3f" get(s.etot)
+        @printf "    E: %6.3f" get(s.etot)
         println()
+        println("    qx=$(particles[1].qx) vx=$(particles[1].ux)")
         flush(STDOUT)
         nothing
     end
@@ -581,15 +634,16 @@ function output_file(tok::Future{Void}, s::State)
         try rm("output.h5") end
     end
     @future Void begin
-        h5open("output.h5", "w") do f
+        # Flags: rd::Bool, wr::Bool, cr::Bool, tr::Bool, ff::Bool
+        h5open("output.h5", true, true, true, false, false) do f
             for field in (:u, :ft, :fx, :fy, :fz)
-                write(f, "State/iter=$(s.iter)/cells/$field",
+                write(f, "State/iter=$(s.iter)/Cells/$field",
                     map(c->c.(field),
                         sub(get(s.state).cells, 2:ni+1, 2:nj+1, 2:nk+1)))
             end
             if !isempty(get(s.state).particles)
-                for field in (:m, :q, :qx, :qy, :qz, :px, :py, :pz)
-                    write(f, "State/iter=$(s.iter)/particles/$field",
+                for field in (:m, :q, :qt, :qx, :qy, :qz, :ut, :ux, :uy, :uz)
+                    write(f, "State/iter=$(s.iter)/Particles/$field",
                         map(p->p.(field), get(s.state).particles))
                 end
             end
@@ -626,7 +680,7 @@ end
 # Driver
 
 function main()
-    println("WaveToy   [$ni,$nj,$nk],[$np]")
+    println("WaveToy    [$ni,$nj,$nk],[$np]")
     tok = init_output()
     s = init()
     tok = output(tok, s)
@@ -636,6 +690,43 @@ function main()
     end
     wait_output(tok)
     println("Done.")
+end
+
+
+
+# Analysis
+
+function plot_cells1d(; field::Symbol=:u)
+    h5open("output.h5", "r") do f
+        data = Array{Float32}(ni, niters ÷ outfile_every + 1)
+        for iter in 0:outfile_every:niters
+            n = iter ÷ outfile_every + 1
+            data[:,n] = sub(read(f["State/iter=$iter/Cells/$field"]), :, 1, 1)
+        end
+        imshow(data',
+            cmap=:viridis,
+            extent=(xmin-dx/2, xmax-dx/2, tmin-dt/2, tmax+dt/2),
+            interpolation=:nearest)
+    end
+end
+
+function plot_cells2d(; iter::Integer=0, field::Symbol=:u)
+    h5open("output.h5", "r") do f
+        data = read(f["State/iter=$iter/Cells/$field"])
+        imshow(data[:,:,1]', vmin=minimum(data), vmax=maximum(data), cmap=:viridis)
+    end
+end
+
+function plot_particles(; field::Symbol=:qx)
+    h5open("output.h5", "r") do f
+        times = [i*dt for i = 0:outfile_every:niters]
+        data = Array{Float32}(np, niters ÷ outfile_every + 1)
+        for iter in 0:outfile_every:niters
+            n = iter ÷ outfile_every + 1
+            data[:,n] = sub(read(f["State/iter=$iter/Particles/$field"]), :)
+        end
+        plot(data[1,:][:], times, color=:red)
+    end
 end
 
 end
