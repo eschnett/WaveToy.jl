@@ -139,16 +139,16 @@ immutable Norm
 end
 import Base: count, sum, min, max
 export count, sum, min, max, avg, sdv, norm1, norm2, norminf
-@fastmath @inline count(n::Norm) = n.count
-@fastmath @inline sum(n::Norm) = n.sum
-@fastmath @inline min(n::Norm) = n.min1
-@fastmath @inline max(n::Norm) = n.max1
-@fastmath @inline avg(n::Norm) = n.sum / n.count
-@fastmath @inline sdv(n::Norm) =
-    sqrt(max(0.0, n.count * n.sum2 - n.sum^2)) / n.count
-@fastmath @inline norm1(n::Norm) = n.sumabs / n.count
-@fastmath @inline norm2(n::Norm) = sqrt(n.sum2 / n.count)
-@fastmath @inline norminf(n::Norm) = n.maxabs
+@inline count(n::Norm) = n.count
+@inline sum(n::Norm) = n.sum
+@inline min(n::Norm) = n.min1
+@inline max(n::Norm) = n.max1
+@inline avg(n::Norm) = @fastmath n.sum / n.count
+@inline sdv(n::Norm) =
+    @fastmath sqrt(max(0.0, n.count * n.sum2 - n.sum^2)) / n.count
+@inline norm1(n::Norm) = @fastmath n.sumabs / n.count
+@inline norm2(n::Norm) = @fastmath sqrt(n.sum2 / n.count)
+@inline norminf(n::Norm) = n.maxabs
 import Base: zero, +
 export zero, +
 @inline zero(::Type{Norm}) = Norm()
