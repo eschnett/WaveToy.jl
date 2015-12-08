@@ -9,7 +9,7 @@ using PyPlot
 
 const dim = 3
 
-const ni = 8
+const ni = 16
 const nj = 1
 const nk = 1
 
@@ -28,17 +28,17 @@ const dz = (zmax - zmin) / nk
 xpos(i) = xmin + (i - 2) * dx
 ypos(j) = ymin + (j - 2) * dy
 zpos(k) = zmin + (k - 2) * dz
-ipos(x) = mod(round(Int, (x - xmin) / dx), ni) + 2
-jpos(y) = mod(round(Int, (y - ymin) / dy), nj) + 2
-kpos(z) = mod(round(Int, (z - zmin) / dz), nk) + 2
+ipos(x) = mod(floor(Int, (x - xmin) / dx), ni) + 2
+jpos(y) = mod(floor(Int, (y - ymin) / dy), nj) + 2
+kpos(z) = mod(floor(Int, (z - zmin) / dz), nk) + 2
 
 const np = 1
-const mp = 4.0 # 1.0
+const mp = 1.0
 const qp = 1.0
 
 const mass = 0.0
 
-const A = 1.0
+const A = 0.25
 const kx = ni==1 ? 0.0 : 2π / (xmax - xmin)
 const ky = nj==1 ? 0.0 : 2π / (ymax - ymin)
 const kz = nk==1 ? 0.0 : 2π / (zmax - zmin)
@@ -484,6 +484,24 @@ function Norm{T}(a::Vector{T})
 end
 Norm(g::Grid) = Norm(g.cells) + Norm(g.particles)
 
+export interpolate
+function interpolate(g::Grid, x::Float64, y::Float64, z::Float64)
+    i0,j0,k0 = ipos(x), jpos(y), kpos(z)
+    i1,j1,k1 = i0+1, j0+1, j0+1
+    dx,dy,dz = x-xpos(i0), y-ypos(j0), z-zpos(k0)
+    c = g.cells
+    fi0,fj0,fk0 = 1-dx, 1-dy, 1-dz
+    fi1,fj1,fk1 = dx, dy, dz
+    (fi0*fj0*fk0 * c[i0,j0,k0] +
+     fi1*fj0*fk0 * c[i1,j0,k0] +
+     fi0*fj1*fk0 * c[i0,j1,k0] +
+     fi1*fj1*fk0 * c[i1,j1,k0] +
+     fi0*fj0*fk1 * c[i0,j0,k1] +
+     fi1*fj0*fk1 * c[i1,j0,k1] +
+     fi0*fj1*fk1 * c[i0,j1,k1] +
+     fi1*fj1*fk1 * c[i1,j1,k1])
+end
+
 export energy, total_energy
 function energy(g::Grid)
     c = g.cells
@@ -551,9 +569,8 @@ function rhs(g::Grid)
     rp = similar(p)
     @inbounds @simd for n in eachindex(rp)
         rp[n] = rhs(p[n])
-        # TODO: interpolate
-        i,j,k = ipos(p[n].qx), jpos(p[n].qy), kpos(p[n].qz)
-        rp[n] += rhs(p[n], c[i,j,k])
+        cn = interpolate(g, p[n].qx, p[n].qy, p[n].qz)
+        rp[n] += rhs(p[n], cn)
     end
     Grid(1, rc, rp)
 end
