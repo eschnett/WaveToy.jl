@@ -117,34 +117,38 @@ immutable Norm
     sum::Float64
     sum2::Float64
     sumabs::Float64
-    min::Float64
-    max::Float64
+    min1::Float64
+    max1::Float64
     maxabs::Float64
     @inline function Norm()
-        new(0.0, 0.0, 0.0, 0.0, typemax(Float64), typemin(Float64), 0.0)
+        @fastmath begin
+            new(0.0, 0.0, 0.0, 0.0, typemax(Float64), typemin(Float64), 0.0)
+        end
     end
     @inline function Norm(x0::Real)
-        x = Float64(x0)
-        new(1.0, x, x^2, abs(x), x, x, abs(x))
+        @fastmath begin
+            x = Float64(x0)
+            new(1.0, x, x^2, abs(x), x, x, abs(x))
+        end
     end
-    # TODO: @fastmath
     @inline function Norm(x::Norm, y::Norm)
-        new(x.count + y.count, x.sum + y.sum, x.sum2 + y.sum2,
-            x.sumabs + y.sumabs, min(x.min, y.min), max(x.max, y.max),
+        @fastmath new(x.count + y.count, x.sum + y.sum, x.sum2 + y.sum2,
+            x.sumabs + y.sumabs, min(x.min1, y.min1), max(x.max1, y.max1),
             max(x.maxabs, y.maxabs))
     end
 end
 import Base: count, sum, min, max
 export count, sum, min, max, avg, sdv, norm1, norm2, norminf
-@inline count(n::Norm) = n.count
-@inline sum(n::Norm) = n.sum
-@inline min(n::Norm) = n.min
-@inline max(n::Norm) = n.max
-@inline avg(n::Norm) = n.sum / n.count
-@inline sdv(n::Norm) = sqrt(max(0.0, n.count * n.sum2 - n.sum^2)) / n.count
-@inline norm1(n::Norm) = n.sumabs / n.count
-@inline norm2(n::Norm) = sqrt(n.sum2 / n.count)
-@inline norminf(n::Norm) = n.maxabs
+@fastmath @inline count(n::Norm) = n.count
+@fastmath @inline sum(n::Norm) = n.sum
+@fastmath @inline min(n::Norm) = n.min1
+@fastmath @inline max(n::Norm) = n.max1
+@fastmath @inline avg(n::Norm) = n.sum / n.count
+@fastmath @inline sdv(n::Norm) =
+    sqrt(max(0.0, n.count * n.sum2 - n.sum^2)) / n.count
+@fastmath @inline norm1(n::Norm) = n.sumabs / n.count
+@fastmath @inline norm2(n::Norm) = sqrt(n.sum2 / n.count)
+@fastmath @inline norminf(n::Norm) = n.maxabs
 import Base: zero, +
 export zero, +
 @inline zero(::Type{Norm}) = Norm()
@@ -458,17 +462,23 @@ end
 # Norm(a::Array{Float64,dim}) = mapreduce(Norm, +, a[2:end-1, 2:end-1, 2:end-1])
 function Norm{T}(a::Array{T,dim})
     n = Norm()
-    # TODO: use @simd
-    @inbounds for elt in sub(a, 2:size(a,1)-1, 2:size(a,2)-1, 2:size(a,3)-1)
-        n += Norm(elt)
+    # @inbounds for elt1 in sub(a, 2:size(a,1)-1, 2:size(a,2)-1, 2:size(a,3)-1)
+    #     n += Norm(elt)
+    # end
+    @inbounds for k in 2:size(a,3)-1, j in 2:size(a,2)-1
+        @simd for i in 2:size(a,1)-1
+            n += Norm(a[i,j,k])
+        end
     end
     n
 end
 function Norm{T}(a::Vector{T})
     n = Norm()
-    # TODO: use @simd
-    @inbounds for elt in a
-        n += Norm(elt)
+    # @inbounds for elt in a
+    #     n += Norm(elt)
+    # end
+    @inbounds @simd for i in eachindex(a)
+        n += Norm(a[i])
     end
     n
 end
