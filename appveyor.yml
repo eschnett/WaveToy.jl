@@ -1,9 +1,17 @@
 environment:
   matrix:
   - JULIAVERSION: "julialang/bin/winnt/x86/0.4/julia-0.4-latest-win32.exe"
+    PYTHONDIR: "C:\\Python27"
+    PYTHON: "C:\\Python27\\python.exe"
   - JULIAVERSION: "julialang/bin/winnt/x64/0.4/julia-0.4-latest-win64.exe"
+    PYTHONDIR: "C:\\Python27"
+    PYTHON: "C:\\Python27\\python.exe"
   - JULIAVERSION: "julianightlies/bin/winnt/x86/julia-latest-win32.exe"
+    PYTHONDIR: "C:\\Python27"
+    PYTHON: "C:\\Python27\\python.exe"
   - JULIAVERSION: "julianightlies/bin/winnt/x64/julia-latest-win64.exe"
+    PYTHONDIR: "C:\\Python27"
+    PYTHON: "C:\\Python27\\python.exe"
 
 branches:
   only:
@@ -17,7 +25,8 @@ notifications:
     on_build_status_changed: false
 
 install:
-# Download most recent Julia Windows binary
+  - "SET PATH=%PYTHONDIR%;%PYTHONDIR%\\Scripts;%PATH%"
+  # Download most recent Julia Windows binary
   - ps: (new-object net.webclient).DownloadFile(
         $("http://s3.amazonaws.com/"+$env:JULIAVERSION),
         "C:\projects\julia-binary.exe")
