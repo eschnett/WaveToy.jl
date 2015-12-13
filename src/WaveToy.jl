@@ -46,8 +46,8 @@ const ω = sqrt(kx^2 + ky^2 + kz^2)
 
 const epsdiss = 0.01
 
-const tmin = 0.0
-const tmax = maxL / (ω/2π)
+const tmin = 0.25 + 0.0
+const tmax = 0.25 + maxL / (ω/2π)
 
 const cfl = 1 / (ω/2π) / 2
 const dt = cfl * min(dx, dy, dz)
@@ -159,9 +159,26 @@ export zero, +
 # Physics
 
 """
-    See Poisson, Pound, Vega,
-    "The Motion of Point Particles in Curved Spacetime", LRR-2011-7 (2011),
-    DOI 10.12942/lrr-2011-7
+See Poisson, Pound, Vega,
+"The Motion of Point Particles in Curved Spacetime", LRR-2011-7 (2011),
+DOI 10.12942/lrr-2011-7
+
+However, we use the opposite sign convention for the charge q.
+
+    dm/dτ   = q u^a D_a u
+    dq^a/dτ = u^a
+    du^a/dτ = -q/m (g^ab - u^a u^b) D_b u
+    d/dτ    = u^t d/dt
+
+    dm/dt   = q u^a / u^t D_a u
+    dq^a/dt = u^a / u^t
+    du^a/dt = -q/m (g^ab - u^a u^b) / u^t D_b u
+
+    E     = m u^t + q u
+    dE/dτ = q D_t u
+
+Idea:
+    Subtract field multiples that are in the kernel of the wave equation
 """
 function physics end
 
@@ -221,24 +238,25 @@ export energy
 end
 
 "No wave"
-@inline function empty(t::Float64, i::Int, j::Int, k::Int)
+@inline function empty(t::Float64, x::Float64, y::Float64, z::Float64)
     Cell(0, 0, 0, 0, 0)
 end
 
 "Standing wave"
-@inline function standing(t::Float64, i::Int, j::Int, k::Int)
-    x,y,z = xpos(i), ypos(j), zpos(k)
+@inline function standing(t::Float64, x::Float64, y::Float64, z::Float64)
     u = A * sin(ω * t) * cos(kx * x) * cos(ky * y) * cos(kz * z)
     ft = A * ω * cos(ω * t) * cos(kx * x) * cos(ky * y) * cos(kz * z)
     fx = - A * kx * sin(ω * t) * sin(kx * x) * cos(ky * y) * cos(kz * z)
     fy = - A * ky * sin(ω * t) * cos(kx * x) * sin(ky * y) * cos(kz * z)
     fz = - A * kz * sin(ω * t) * cos(kx * x) * cos(ky * y) * sin(kz * z)
     Cell(u, ft, fx, fy, fz)
+    Cell(u, 0, fx, fy, fz)
 end
 
 export analytic
 @inline function analytic(t::Float64, i::Int, j::Int, k::Int)
-    standing(t, i, j, k)
+    x,y,z = xpos(i), ypos(j), zpos(k)
+    standing(t, x, y, z)
 end
 
 export init
@@ -275,9 +293,8 @@ export rhs
                         (bym.fz - 2*c.fz + byp.fz) / dy +
                         (bzm.fz - 2*c.fz + bzp.fz) / dz)
     Cell(udot, ftdot, fxdot, fydot, fzdot)
+    Cell(0,0,0,0,0)
 end
-
-#TODO: rhs(c::Cell, p::Particle)
 
 
 
@@ -287,7 +304,7 @@ export Particle
 immutable Particle
     m::Float64    # dynamical mass
     q::Float64    # charge
-    qt::Float64    # q_a
+    qt::Float64    # q^a
     qx::Float64
     qy::Float64
     qz::Float64
@@ -333,9 +350,141 @@ export +, -, *, /, \, axpy
     (Norm(p.m) + Norm(p.q) + Norm(p.qt) + Norm(p.qx) + Norm(p.qy) + Norm(p.qz) +
         Norm(p.ut) + Norm(p.ux) + Norm(p.uy) + Norm(p.uz))
 
+export usingular
+"""
+Singular field of a particle
+
+This singular field satisfies the equations of motion.
+"""
+@inline function usingular(p::Particle, x::Float64, y::Float64, z::Float64)
+    # Instantaneous trajectory of particle: q^a + τ u^a
+    # Observer location: x^a
+    # Distance between observer and particle:
+    #     d^a = q^a + τ u^a - x^a
+    #     g_ab d^a u^b = 0
+    #     τ = g_ab (q^a - x^a) u^b
+    τ = (p.qx - x) * p.ux + (p.qy - y) * p.uy + (p.qz - z) * p.uz
+    dt = τ * p.ut
+    dx = p.qx - x + τ * p.ux
+    dy = p.qy - y + τ * p.uy
+    dz = p.qz - z + τ * p.uz
+    r2 = dx^2 + dy^2 + dz^2 - dt^2
+    u = p.q / sqrt(r2)
+    fx = - u / r2 * (x - p.qx)
+    fy = - u / r2 * (y - p.qy)
+    fz = - u / r2 * (z - p.qz)
+    ft = (fx * p.ux + fy * p.uy + fz * p.uz) / p.ut
+    Cell(u, ft, fx, fy, fz)
+end
+
+export usingular_dot
+"""
+Time derivative of the singular field of a particle
+
+This time derivative is non-zero for a moving particle. This satisfies the
+equations of motion if the particle is not accelerated.
+"""
+@inline function usingular_dot(p::Particle, rp::Particle, x::Float64,
+        y::Float64, z::Float64)
+    # Instantaneous trajectory of particle: q^a + τ u^a
+    # Observer location: x^a
+    # Distance between observer and particle:
+    #     d^a = q^a + τ u^a - x^a
+    #     g_ab d^a u^b = 0
+    #     τ = g_ab (q^a - x^a) u^b
+    δx = p.qx - x
+    δy = p.qy - y
+    δz = p.qz - z
+    τ = δx * p.ux + δy * p.uy + δz * p.uz
+    dt = τ * p.ut
+    dx = δx + τ * p.ux
+    dy = δy + τ * p.uy
+    dz = δz + τ * p.uz
+    r2 = dx^2 + dy^2 + dz^2 - dt^2
+    u = p.q / sqrt(r2)
+
+    fx = - u / r2 * δx
+    fy = - u / r2 * δy
+    fz = - u / r2 * δz
+    ft = (fx * p.ux + fy * p.uy + fz * p.uz) / p.ut
+
+    τdot = (rp.qx * p.ux + rp.qy * p.uy + rp.qz * p.uz +
+            δx * rp.ux + δy * rp.uy + δz * rp.uz)
+    dtdot = τdot * p.ut + τ * rp.ut
+    dxdot = rp.qx + τdot * p.ux + τ * rp.ux
+    dydot = rp.qy + τdot * p.uy + τ * rp.uy
+    dzdot = rp.qz + τdot * p.uz + τ * rp.uz
+    r2dot = 2 * dx * dxdot + 2 * dy * dydot + 2 * dz * dzdot - 2 * dt * dtdot
+    udot = rp.q / sqrt(r2) - 1/2 * p.q / sqrt(r2)^3 * r2dot
+
+    fxdot = - udot / r2 * δx + u / r2^2 * r2dot * δx + u / r2 * rp.qx
+    fydot = - udot / r2 * δy + u / r2^2 * r2dot * δy + u / r2 * rp.qy
+    fzdot = - udot / r2 * δz + u / r2^2 * r2dot * δz + u / r2 * rp.qz
+    ftdot = (fxdot * p.ux + fx * rp.ux + fydot * p.uy + fy * rp.uy +
+             fzdot * p.uz + fz * rp.uz - ft * rp.ut) / p.ut
+
+    Cell(u, ft, fx, fy, fz), Cell(udot, ftdot, fxdot, fydot, fzdot)
+end
+
+export usingular_accel
+"""
+Time derivative of the singular field of a particle due to its acceleration
+
+The singular field changes both due to the motion of the particle and due to its
+acceleration. Here, we ignore the change due to the particles motion, since this
+part satisfies the equations of motion.
+"""
+@inline function usingular_accel(p::Particle, rp::Particle, x::Float64,
+        y::Float64, z::Float64)
+    # Instantaneous trajectory of particle: q^a + τ u^a
+    # Observer location: x^a
+    # Distance between observer and particle:
+    #     d^a = q^a + τ u^a - x^a
+    #     g_ab d^a u^b = 0
+    #     τ = g_ab (q^a - x^a) u^b
+    δx = p.qx - x
+    δy = p.qy - y
+    δz = p.qz - z
+    τ = δx * p.ux + δy * p.uy + δz * p.uz
+    dt = τ * p.ut
+    dx = δx + τ * p.ux
+    dy = δy + τ * p.uy
+    dz = δz + τ * p.uz
+    r2 = dx^2 + dy^2 + dz^2 - dt^2
+    u = p.q / sqrt(r2)
+
+    fx = - u / r2 * δx
+    fy = - u / r2 * δy
+    fz = - u / r2 * δz
+    ft = (fx * p.ux + fy * p.uy + fz * p.uz) / p.ut
+
+    τdot = δx * rp.ux + δy * rp.uy + δz * rp.uz
+    dtdot = τdot * p.ut + τ * rp.ut
+    dxdot = τdot * p.ux + τ * rp.ux
+    dydot = τdot * p.uy + τ * rp.uy
+    dzdot = τdot * p.uz + τ * rp.uz
+    r2dot = 2 * dx * dxdot + 2 * dy * dydot + 2 * dz * dzdot - 2 * dt * dtdot
+    if r2 < 1.0e-12
+        udot = 0.0
+        fxdot = 0.0
+        fydot = 0.0
+        fzdot = 0.0
+        ftdot = 0.0
+    else
+        udot = - 1/2 * p.q / sqrt(r2)^3 * r2dot
+        fxdot = - udot / r2 * δx + u / r2^2 * r2dot * δx
+        fydot = - udot / r2 * δy + u / r2^2 * r2dot * δy
+        fzdot = - udot / r2 * δz + u / r2^2 * r2dot * δz
+        ftdot = (fxdot * p.ux + fx * rp.ux + fydot * p.uy + fy * rp.uy +
+                 fzdot * p.uz + fz * rp.uz - ft * rp.ut) / p.ut
+    end
+
+    Cell(udot, ftdot, fxdot, fydot, fzdot)
+end
+
 export energy
 @inline function energy(p::Particle)
-    p.m/2 * (p.ut^2 + p.ux^2 + p.uy^2 + p.uz^2)
+    p.m * p.ut
 end
 @inline function energy(p::Particle, c::Cell)
     p.q * c.u
@@ -346,13 +495,13 @@ end
     m = mp
     q = qp
     qt = 0.0
-    qx = xmin + (xmax - xmin) * 5/8
+    qx = xmin + (xmax - xmin) * 4/8
     qy = ymin + (ymax - ymin)/4
     qz = zmin + (zmax - zmin)/4
-    ut = 1
-    ux = 0
+    ux = 0.25
     uy = 0
     uz = 0
+    ut = sqrt(1 - (ux^2 + uy^2 + uz^2))
     Particle(m, q, qt, qx, qy, qz, ut, ux, uy, uz)
 end
 
@@ -381,18 +530,18 @@ export rhs
     qxdot = p.ux / p.ut
     qydot = p.uy / p.ut
     qzdot = p.uz / p.ut
-    ptdot = 0
-    pxdot = 0
-    pydot = 0
-    pzdot = 0
-    Particle(mdot, qdot, qtdot, qxdot, qydot, qzdot, ptdot, pxdot, pydot, pzdot)
+    utdot = 0
+    uxdot = 0
+    uydot = 0
+    uzdot = 0
+    Particle(mdot, qdot, qtdot, qxdot, qydot, qzdot, utdot, uxdot, uydot, uzdot)
 end
 @inline function rhs(p::Particle, c::Cell)
     # after (17.7)
     # u^t = dt/dτ   u^t/dt = 1/dτ
     # (17.8)
     f_u = - c.ft * p.ut + c.fx * p.ux + c.fy * p.uy + c.fz * p.uz
-    mdot = - p.q * f_u / p.ut
+    mdot = p.q * f_u / p.ut
     qdot = 0
     qtdot = 0
     qxdot = 0
@@ -415,11 +564,16 @@ end
                      p.uz * p.ux  * c.fx +
                      p.uz * p.uy  * c.fy +
                ( 1 + p.uz * p.uz) * c.fz)
-    utdot = p.q * guu_f_t / (p.m * p.ut)
-    uxdot = p.q * guu_f_x / (p.m * p.ut)
-    uydot = p.q * guu_f_y / (p.m * p.ut)
-    uzdot = p.q * guu_f_z / (p.m * p.ut)
+    utdot = - p.q * guu_f_t / (p.m * p.ut)
+    uxdot = - p.q * guu_f_x / (p.m * p.ut)
+    uydot = - p.q * guu_f_y / (p.m * p.ut)
+    uzdot = - p.q * guu_f_z / (p.m * p.ut)
     Particle(mdot, qdot, qtdot, qxdot, qydot, qzdot, utdot, uxdot, uydot, uzdot)
+end
+@inline function rhs(c::Cell, p::Particle, rp::Particle)
+    x,y,z = xpos(i), ypos(j), zpos(k)
+    c,rc = usingular_dot(p, rp, x,y,z)
+    rc
 end
 
 
@@ -513,6 +667,8 @@ function energy(g::Grid)
     ϵp = similar(p, Float64)
     @inbounds @simd for n in eachindex(p)
         ϵp[n] = energy(p[n])
+        cn = interpolate(g, p[n].qx, p[n].qy, p[n].qz)
+        ϵp[n] += energy(p[n], cn)
     end
     ϵc, ϵp
 end
@@ -582,7 +738,7 @@ end
 export State
 type State
     iter::Int
-    state::Future{Grid}
+    grid::Future{Grid}
     rhs::Future{Grid}
     ϵ::Future{Tuple{Array{Float64,3}, Vector{Float64}}}
     etot::Future{Float64}
@@ -602,31 +758,31 @@ end
 export rk2_central
 "Central RK2 (is not TVD)"
 function rk2_central(s::State)
-    s0 = s.state
+    g0 = s.grid
     r0 = s.rhs
-    # s1 = s0 + (dt/2) * r0
-    s1 = @future Grid axpy(dt/2, get(r0), get(s0))
-    r1 = @future Grid rhs(get(s1))
-    # s2 = s0 + dt * r1
-    s2 = @future Grid axpy(dt, get(r1), get(s0))
-    # s2 = s0
-    # axpy!(dt, r1, s2)
-    s2 = @future Grid axpy!(dt/2, get(r1), axpy(dt/2, get(r0), get(s0)))
-    State(s.iter+1, s2)
+    # g1 = g0 + (dt/2) * r0
+    g1 = @future Grid axpy(dt/2, get(r0), get(g0))
+    r1 = @future Grid rhs(get(g1))
+    # g2 = g0 + dt * r1
+    # g2 = @future Grid axpy(dt, get(r1), get(g0))
+    # g2 = g0
+    # axpy!(dt, r1, g2)
+    g2 = @future Grid axpy!(dt/2, get(r1), axpy(dt/2, get(r0), get(g0)))
+    State(s.iter+1, g2)
 end
 
 export rk2_tvd
 "TVD RK2"
 function rk2_tvd(s::State)
-    s0 = s.state
+    g0 = s.grid
     r0 = s.rhs
-    # s1 = s0 + dt * r0
-    s1 = @future Grid axpy(dt, get(r0), get(s0))
-    r1 = @future Grid rhs(get(s1))
-    # s2 = 1/2 s0 + 1/2 s1 + 1/2 dt r1
-    #    = s0 + 1/2 dt r0 + 1/2 dt r1
-    s2 = @future Grid axpy!(dt/2, get(r1), axpy(dt/2, get(r0), get(s0)))
-    State(s.iter+1, s2)
+    # g1 = g0 + dt * r0
+    g1 = @future Grid axpy(dt, get(r0), get(g0))
+    r1 = @future Grid rhs(get(g1))
+    # g2 = 1/2 g0 + 1/2 g1 + 1/2 dt r1
+    #    = g0 + 1/2 dt r0 + 1/2 dt r1
+    g2 = @future Grid axpy!(dt/2, get(r1), axpy(dt/2, get(r0), get(g0)))
+    State(s.iter+1, g2)
 end
 
 
@@ -637,17 +793,16 @@ function output_info(tok::Future{Void}, s::State)
     @future Void begin
         wait(tok)
         @printf "n: %4d" s.iter
-        state = get(s.state)
-        @printf "    t: %5.2f" state.time
-        cells = state.cells
+        grid = get(s.grid)
+        @printf "    t: %5.2f" grid.time
+        cells = grid.cells
         @printf "    ft[0]: %7.3f" cells[2,2,2].ft
-        particles = state.particles
+        particles = grid.particles
         if !isempty(particles)
             @printf "    qx[0]: %7.3f" particles[1].qx
         end
         @printf "    E: %6.3f" get(s.etot)
         println()
-        println("    qx=$(particles[1].qx) vx=$(particles[1].ux)")
         flush(STDOUT)
         nothing
     end
@@ -663,12 +818,12 @@ function output_file(tok::Future{Void}, s::State)
             for field in (:u, :ft, :fx, :fy, :fz)
                 write(f, "State/iter=$(s.iter)/Cells/$field",
                     map(c->c.(field),
-                        sub(get(s.state).cells, 2:ni+1, 2:nj+1, 2:nk+1)))
+                        sub(get(s.grid).cells, 2:ni+1, 2:nj+1, 2:nk+1)))
             end
-            if !isempty(get(s.state).particles)
+            if !isempty(get(s.grid).particles)
                 for field in (:m, :q, :qt, :qx, :qy, :qz, :ut, :ux, :uy, :uz)
                     write(f, "State/iter=$(s.iter)/Particles/$field",
-                        map(p->p.(field), get(s.state).particles))
+                        map(p->p.(field), get(s.grid).particles))
                 end
             end
         end
@@ -743,7 +898,7 @@ end
 
 function plot_particles(; field::Symbol=:qx)
     h5open("output.h5", "r") do f
-        times = [i*dt for i = 0:outfile_every:niters]
+        times = [tmin+i*dt for i = 0:outfile_every:niters]
         data = Array{Float32}(np, niters ÷ outfile_every + 1)
         for iter in 0:outfile_every:niters
             n = iter ÷ outfile_every + 1
